@@ -1,0 +1,330 @@
+<html lang="en">
+<head>
+    <meta charSet="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Model Viewer with Measurement</title>
+    <style>
+        body {
+            margin: 0;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #modeButton {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+<button id="modeButton">Orbit Mode</button>
+<script src="https://cdn.jsdelivr.net/npm/three@0.135.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.135.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.135.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.135.0/examples/js/loaders/FontLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.135.0/examples/js/geometries/TextGeometry.js"></script>
+
+<script>
+    class ModelViewer {
+        constructor(container) {
+            this.container = container;
+            this.scene = new THREE.Scene();
+            this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            this.renderer = new THREE.WebGLRenderer({antialias: true});
+            this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+            this.loader = new THREE.GLTFLoader();
+            this.raycaster = new THREE.Raycaster();
+            this.mouse = new THREE.Vector2();
+            this.measureMode = false;
+            this.measurePoints = [];
+            this.measureLines = [];
+            this.measureTexts = [];
+            this.fontLoader = new THREE.FontLoader();
+            this.font = null;
+            this.tempLine = null;
+            this.tempText = null;
+            this.awaitingFirstClick = false;
+
+            this.init();
+        }
+
+        init() {
+            this.setupRenderer();
+            this.setupCamera();
+            this.setupLights();
+            this.setupControls();
+            this.addEventListeners();
+            this.loadFont();
+            this.animate();
+            this.loadModel('./duck.gltf'); // Update this path
+            this.setupModeButton();
+        }
+
+        setupRenderer() {
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
+            this.container.appendChild(this.renderer.domElement);
+        }
+
+        setupCamera() {
+            this.camera.position.z = 5;
+        }
+
+        setupLights() {
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            this.scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            this.scene.add(directionalLight);
+        }
+
+        setupControls() {
+            this.controls.enableDamping = true;
+            this.controls.dampingFactor = 0.25;
+            this.controls.screenSpacePanning = false;
+            this.controls.maxPolarAngle = Math.PI / 2;
+        }
+
+        addEventListeners() {
+            window.addEventListener('resize', this.onWindowResize.bind(this), false);
+            this.renderer.domElement.addEventListener('click', this.onMouseClick.bind(this));
+            this.renderer.domElement.addEventListener('contextmenu', this.onRightClick.bind(this));
+            this.renderer.domElement.addEventListener('mousemove', this.onMouseMove.bind(this));
+            document.addEventListener('keydown', this.onKeyDown.bind(this));
+        }
+
+        onWindowResize() {
+            this.camera.aspect = window.innerWidth / window.innerHeight;
+            this.camera.updateProjectionMatrix();
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        loadModel(url) {
+            this.loader.load(url, (gltf) => {
+                this.scene.add(gltf.scene);
+                console.log('Model loaded successfully');
+            }, undefined, (error) => {
+                console.error('Error loading model:', error);
+            });
+        }
+
+        animate() {
+            requestAnimationFrame(this.animate.bind(this));
+            this.controls.update();
+            this.renderer.render(this.scene, this.camera);
+            if (this.measureTexts.length > 0) {
+                this.measureTexts.forEach(text => text.lookAt(this.camera.position));
+            }
+            if (this.tempText) {
+                this.tempText.lookAt(this.camera.position);
+            }
+        }
+
+        loadFont() {
+            this.fontLoader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', (font) => {
+                this.font = font;
+            });
+        }
+
+        setupModeButton() {
+            this.modeButton = document.getElementById('modeButton');
+            this.modeButton.addEventListener('click', this.toggleMeasureMode.bind(this));
+        }
+
+        toggleMeasureMode() {
+            this.measureMode = !this.measureMode;
+            this.controls.enabled = !this.measureMode;
+            if (this.measureMode) {
+                this.awaitingFirstClick = true;
+            } else {
+                this.clearTempMeasurement();
+            }
+            this.modeButton.textContent = this.measureMode ? 'Measure Mode' : 'Orbit Mode';
+            console.log(`Measure mode ${this.measureMode ? 'activated' : 'deactivated'}`);
+        }
+
+        onMouseClick(event) {
+            event.preventDefault();
+            if (!this.measureMode) return;
+
+            this.updateMousePosition(event);
+            const point = this.getPointOnRay();
+            if (point) {
+                if (this.awaitingFirstClick) {
+                    this.measurePoints = [point];
+                    this.awaitingFirstClick = false;
+                } else {
+                    this.measurePoints.push(point);
+                    this.addMeasureLine();
+                }
+            }
+        }
+
+        onRightClick(event) {
+            event.preventDefault();
+            if (!this.measureMode) return;
+
+            this.finishMeasurement();
+        }
+
+        onMouseMove(event) {
+            if (!this.measureMode || this.measurePoints.length === 0 || this.awaitingFirstClick) return;
+
+            this.updateMousePosition(event);
+            const point = this.getPointOnRay();
+            if (point) {
+                this.updateTempMeasureLine(point);
+            }
+        }
+
+        onKeyDown(event) {
+            if (event.key === 'Escape') {
+                this.clearAllMeasurements();
+            }
+        }
+
+        updateMousePosition(event) {
+            this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        }
+
+        // getPointOnRay() {
+        //     this.raycaster.setFromCamera(this.mouse, this.camera);
+        //     const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+        //
+        //     if (intersects.length > 0) {
+        //         return intersects[0].point;
+        //     } else {
+        //         // If no intersection, get a point on the ray at a fixed distance
+        //         const ray = this.raycaster.ray;
+        //         return ray.at(10, new THREE.Vector3());
+        //     }
+        // }
+
+        getPointOnRay() {
+            // this.raycaster.setFromCamera(this.mouse, this.camera);
+            // const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+            //
+            // if (intersects.length > 0) {
+            //     return intersects[0].point;
+            // } else {
+                // If no intersection, calculate the end point on the plane at z=0
+                const vector = new THREE.Vector3(this.mouse.x, this.mouse.y, 0.5).unproject(this.camera);
+                const dir = vector.sub(this.camera.position).normalize();
+                const distance = - this.camera.position.z / dir.z;
+                return this.camera.position.clone().add(dir.multiplyScalar(distance));
+            // }
+        }
+
+        addMeasureLine() {
+            const startPoint = this.measurePoints[this.measurePoints.length - 2];
+            const endPoint = this.measurePoints[this.measurePoints.length - 1];
+
+            const geometry = new THREE.BufferGeometry().setFromPoints([startPoint, endPoint]);
+            const material = new THREE.LineBasicMaterial({color: 0xffff00, depthTest: false});
+            const line = new THREE.Line(geometry, material);
+            this.measureLines.push(line);
+            this.scene.add(line);
+
+            const distance = startPoint.distanceTo(endPoint);
+            this.addMeasureText(startPoint, endPoint, distance);
+        }
+
+        addMeasureText(startPoint, endPoint, distance) {
+            if (!this.font) return;
+
+            const midPoint = new THREE.Vector3().addVectors(startPoint, endPoint).multiplyScalar(0.5);
+            const text = `${distance.toFixed(2)} m`;
+
+            const textGeometry = new THREE.TextGeometry(text, {
+                font: this.font,
+                size: 0.1,
+                height: 0.01
+            });
+            const textMaterial = new THREE.MeshBasicMaterial({color: 0xffff00, depthTest: false});
+            const measureText = new THREE.Mesh(textGeometry, textMaterial);
+            measureText.position.copy(midPoint);
+            measureText.lookAt(this.camera.position);
+            this.measureTexts.push(measureText);
+            this.scene.add(measureText);
+        }
+
+        updateTempMeasureLine(endPoint) {
+            const startPoint = this.measurePoints[this.measurePoints.length - 1];
+
+            if (this.tempLine) {
+                this.scene.remove(this.tempLine);
+            }
+            if (this.tempText) {
+                this.scene.remove(this.tempText);
+            }
+
+            const geometry = new THREE.BufferGeometry().setFromPoints([startPoint, endPoint]);
+            const material = new THREE.LineBasicMaterial({color: 0xff0000, depthTest: false});
+            this.tempLine = new THREE.Line(geometry, material);
+            this.scene.add(this.tempLine);
+
+            const distance = startPoint.distanceTo(endPoint);
+            this.updateTempMeasureText(startPoint, endPoint, distance);
+        }
+
+        updateTempMeasureText(startPoint, endPoint, distance) {
+            if (!this.font) return;
+
+            const midPoint = new THREE.Vector3().addVectors(startPoint, endPoint).multiplyScalar(0.5);
+            const text = `${distance.toFixed(2)} m`;
+
+            const textGeometry = new THREE.TextGeometry(text, {
+                font: this.font,
+                size: 0.1,
+                height: 0.01
+            });
+            const textMaterial = new THREE.MeshBasicMaterial({color: 0xff0000, depthTest: false});
+            this.tempText = new THREE.Mesh(textGeometry, textMaterial);
+            this.tempText.position.copy(midPoint);
+            this.tempText.lookAt(this.camera.position);
+            this.scene.add(this.tempText);
+        }
+
+        finishMeasurement() {
+            this.clearTempMeasurement();
+            this.awaitingFirstClick = true;
+            this.measurePoints = [];
+            console.log('Measurement segment finished');
+        }
+
+        clearTempMeasurement() {
+            if (this.tempLine) {
+                this.scene.remove(this.tempLine);
+                this.tempLine = null;
+            }
+            if (this.tempText) {
+                this.scene.remove(this.tempText);
+                this.tempText = null;
+            }
+        }
+
+        clearAllMeasurements() {
+            this.measureLines.forEach(line => this.scene.remove(line));
+            this.measureTexts.forEach(text => this.scene.remove(text));
+            this.clearTempMeasurement();
+            this.measureLines = [];
+            this.measureTexts = [];
+            this.measurePoints = [];
+            this.awaitingFirstClick = true;
+            console.log('All measurements cleared');
+        }
+    }
+
+    // Initialize the viewer
+    const container = document.body;
+    const viewer = new ModelViewer(container);
+</script>
+</body>
+</html>

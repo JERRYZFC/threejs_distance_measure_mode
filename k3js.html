@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Model Viewer with Measurement</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.135.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.135.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.135.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.135.0/examples/js/loaders/FontLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.135.0/examples/js/geometries/TextGeometry.js"></script>
+
+    <script>
+        class ModelViewer {
+            constructor(container) {
+                this.container = container;
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.controls = null;
+                this.loader = new THREE.GLTFLoader();
+                
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+                this.measureMode = false;
+                this.measurePoints = [];
+                this.measureLine = null;
+                this.measureText = null;
+                this.fontLoader = new THREE.FontLoader();
+                this.font = null;
+
+                this.init();
+            }
+
+            init() {
+                this.setupRenderer();
+                this.setupCamera();
+                this.setupLights();
+                this.setupControls();
+                this.addEventListeners();
+                this.initMeasureMode();
+                this.animate();
+                this.loadModel('./duck.gltf'); // Update this path
+            }
+
+            setupRenderer() {
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.container.appendChild(this.renderer.domElement);
+            }
+
+            setupCamera() {
+                this.camera.position.z = 5;
+            }
+
+            setupLights() {
+                const ambientLight = new THREE.AmbientLight(0x404040);
+                this.scene.add(ambientLight);
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+                this.scene.add(directionalLight);
+            }
+
+            setupControls() {
+                this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.dampingFactor = 0.25;
+                this.controls.screenSpacePanning = false;
+                this.controls.maxPolarAngle = Math.PI / 2;
+            }
+
+            addEventListeners() {
+                window.addEventListener('resize', this.onWindowResize.bind(this), false);
+            }
+
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            loadModel(url) {
+                this.loader.load(url, (gltf) => {
+                    this.scene.add(gltf.scene);
+                    console.log('Model loaded successfully');
+                }, undefined, (error) => {
+                    console.error('Error loading model:', error);
+                });
+            }
+
+            animate() {
+                requestAnimationFrame(this.animate.bind(this));
+                if (this.measureText) {
+                    this.measureText.lookAt(this.camera.position);
+                }
+                this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+            }
+
+            initMeasureMode() {
+                this.fontLoader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', (font) => {
+                    this.font = font;
+                });
+
+                document.addEventListener('keydown', this.onKeyDown.bind(this));
+                this.renderer.domElement.addEventListener('click', this.onMouseClick.bind(this));
+                this.renderer.domElement.addEventListener('mousemove', this.onMouseMove.bind(this));
+            }
+
+            onKeyDown(event) {
+                if (event.key === 'k' || event.key === 'K') {
+                    this.toggleMeasureMode();
+                } else if (event.key === 'Escape') {
+                    this.exitMeasureMode();
+                }
+            }
+
+            toggleMeasureMode() {
+                this.measureMode = !this.measureMode;
+                if (this.measureMode) {
+                    this.controls.enabled = false;
+                    console.log('Measure mode activated');
+                } else {
+                    this.exitMeasureMode();
+                }
+            }
+
+            exitMeasureMode() {
+                this.measureMode = false;
+                this.controls.enabled = true;
+                this.clearMeasurement();
+                console.log('Measure mode deactivated');
+            }
+
+            onMouseClick(event) {
+                if (!this.measureMode) return;
+
+                this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+                this.raycaster.setFromCamera(this.mouse, this.camera);
+                const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+
+                if (intersects.length > 0) {
+                    const point = intersects[0].point;
+                    this.measurePoints.push(point);
+
+                    if (this.measurePoints.length === 2) {
+                        this.completeMeasurement();
+                    }
+                }
+            }
+
+            onMouseMove(event) {
+                if (!this.measureMode || this.measurePoints.length === 0) return;
+
+                this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+                this.raycaster.setFromCamera(this.mouse, this.camera);
+                const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+
+                if (intersects.length > 0) {
+                    const point = intersects[0].point;
+                    this.updateMeasureLine(point);
+                }
+            }
+
+            updateMeasureLine(endPoint) {
+                if (this.measureLine) {
+                    this.scene.remove(this.measureLine);
+                }
+                if (this.measureText) {
+                    this.scene.remove(this.measureText);
+                }
+
+                const startPoint = this.measurePoints[this.measurePoints.length - 1];
+                const geometry = new THREE.BufferGeometry().setFromPoints([startPoint, endPoint]);
+                const material = new THREE.LineBasicMaterial({ color: 0xffff00 });
+                this.measureLine = new THREE.Line(geometry, material);
+                this.scene.add(this.measureLine);
+
+                const distance = startPoint.distanceTo(endPoint);
+                this.updateMeasureText(startPoint, endPoint, distance);
+            }
+
+            updateMeasureText(startPoint, endPoint, distance) {
+                if (!this.font) return;
+
+                const midPoint = new THREE.Vector3().addVectors(startPoint, endPoint).multiplyScalar(0.5);
+                const text = `${distance.toFixed(2)} m`;
+
+                const textGeometry = new THREE.TextGeometry(text, {
+                    font: this.font,
+                    size: 0.1,
+                    height: 0.01
+                });
+                const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+                this.measureText = new THREE.Mesh(textGeometry, textMaterial);
+                this.measureText.position.copy(midPoint);
+                this.measureText.lookAt(this.camera.position);
+                this.scene.add(this.measureText);
+            }
+
+            completeMeasurement() {
+                this.measurePoints = [];
+            }
+
+            clearMeasurement() {
+                if (this.measureLine) {
+                    this.scene.remove(this.measureLine);
+                    this.measureLine = null;
+                }
+                if (this.measureText) {
+                    this.scene.remove(this.measureText);
+                    this.measureText = null;
+                }
+                this.measurePoints = [];
+            }
+        }
+
+        // Initialize the viewer
+        const container = document.body;
+        const viewer = new ModelViewer(container);
+    </script>
+</body>
+</html>
